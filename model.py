@@ -1,12 +1,24 @@
 from torch.nn import (
-    Module, Sequential, Conv2d, MaxPool2d, AvgPool2d, Linear, GELU,
-    Identity, Flatten, BatchNorm1d, BatchNorm2d, LogSoftmax,
+    Module,
+    Sequential,
+    Conv2d,
+    MaxPool2d,
+    AvgPool2d,
+    Linear,
+    GELU,
+    Identity,
+    Flatten,
+    BatchNorm1d,
+    BatchNorm2d,
+    LogSoftmax,
 )
+
 
 class ResDoge50(Module):
     """
     A variation on the ResNet50 architecture with added regression head for localization.
     """
+
     def __init__(self, num_classes: int):
         super().__init__()
 
@@ -57,10 +69,12 @@ class ResDoge50(Module):
 
         return y1, y2
 
+
 class ResDoge34(Module):
     """
     A quasi-ResNet34 architecture with additional regression head for bounding box estimation.
     """
+
     def __init__(self, num_classes: int):
         super().__init__()
 
@@ -111,10 +125,12 @@ class ResDoge34(Module):
 
         return y1, y2
 
+
 class VGGDoge(Module):
     """
     A VGG-like architecture with added regression head for bounding box estimation.
     """
+
     def __init__(self, num_classes: int):
         super().__init__()
 
@@ -163,8 +179,10 @@ class VGGDoge(Module):
 
         return y1, y2
 
+
 class Conv7x7Block(Module):
     """The first layer of residual style networks."""
+
     def __init__(self, channels_in: int, channels_out: int, stride: int = 1):
         super().__init__()
 
@@ -175,7 +193,7 @@ class Conv7x7Block(Module):
                 kernel_size=7,
                 stride=stride,
                 padding=1,
-                bias=False
+                bias=False,
             ),
             BatchNorm2d(channels_out),
             GELU(),
@@ -184,8 +202,10 @@ class Conv7x7Block(Module):
     def forward(self, x):
         return self.layers.forward(x)
 
+
 class ResidualBlock(Module):
     """A basic residual block."""
+
     def __init__(self, channels_in: int, channels_out: int, stride: int = 1):
         super().__init__()
 
@@ -220,7 +240,7 @@ class ResidualBlock(Module):
                     kernel_size=3,
                     stride=stride,
                     padding=1,
-                    bias=False
+                    bias=False,
                 ),
             )
 
@@ -239,12 +259,14 @@ class ResidualBlock(Module):
 
         return out
 
+
 class BottleneckBlock(Module):
     """
     A type of residual layer that aims to reduce the number of parameters
     while maintaining the representational capacity of a 2X Residual block
     using projections.
     """
+
     def __init__(self, channels_in: int, channels_out: int, stride: int = 1):
         super().__init__()
 
@@ -254,7 +276,7 @@ class BottleneckBlock(Module):
                 out_channels=channels_in,
                 kernel_size=1,
                 stride=stride,
-                padding='valid',
+                padding="valid",
                 bias=False,
             ),
             BatchNorm2d(channels_in),
@@ -263,7 +285,7 @@ class BottleneckBlock(Module):
                 in_channels=channels_in,
                 out_channels=channels_in,
                 kernel_size=3,
-                padding='same',
+                padding="same",
                 bias=False,
             ),
             BatchNorm2d(channels_in),
@@ -272,7 +294,7 @@ class BottleneckBlock(Module):
                 in_channels=channels_in,
                 out_channels=channels_out,
                 kernel_size=1,
-                padding='valid',
+                padding="valid",
                 bias=False,
             ),
         )
@@ -287,7 +309,7 @@ class BottleneckBlock(Module):
                     kernel_size=3,
                     stride=stride,
                     padding=1,
-                    bias=False
+                    bias=False,
                 ),
             )
 
@@ -301,13 +323,15 @@ class BottleneckBlock(Module):
         x_hat = self.shortcut(x)
 
         z = self.batch_norm(x_hat + residual)
-        
+
         out = self.activation(z)
 
         return out
 
+
 class Conv2XBlock(Module):
     """Two convolutional layers applied sequentially with batch norm."""
+
     def __init__(self, channels_in: int, channels_out: int, stride: int = 1):
         super().__init__()
 
@@ -317,7 +341,7 @@ class Conv2XBlock(Module):
                 out_channels=channels_out,
                 kernel_size=3,
                 stride=stride,
-                padding='same',
+                padding="same",
                 bias=False,
             ),
             BatchNorm2d(channels_out),
@@ -327,7 +351,7 @@ class Conv2XBlock(Module):
                 out_channels=channels_out,
                 kernel_size=3,
                 stride=stride,
-                padding='same',
+                padding="same",
                 bias=False,
             ),
             BatchNorm2d(channels_out),
@@ -336,6 +360,7 @@ class Conv2XBlock(Module):
 
     def forward(self, x):
         return self.layers.forward(x)
+
 
 class FullyConnected(Module):
     def __init__(self, input_features: int, num_neurons: int):
@@ -354,6 +379,7 @@ class FullyConnected(Module):
     def forward(self, x):
         return self.layers.forward(x)
 
+
 class SoftmaxClassifier(Module):
     def __init__(self, input_features: int, num_classes: int):
         super().__init__()
@@ -369,6 +395,7 @@ class SoftmaxClassifier(Module):
 
     def forward(self, x):
         return self.layers.forward(x)
+
 
 class LinearRegressor(Module):
     def __init__(self, input_features: int, num_outputs: int):
