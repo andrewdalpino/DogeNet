@@ -1,4 +1,5 @@
 import time
+import random
 from os import path
 from argparse import ArgumentParser
 
@@ -34,13 +35,14 @@ def main():
     )
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--learning_rate", default=1e-4, type=float)
-    parser.add_argument("--num_epochs", default=1000, type=int)
+    parser.add_argument("--num_epochs", default=10000, type=int)
     parser.add_argument("--eval_epochs", default=10, type=int)
     parser.add_argument("--checkpoint_epochs", default=20, type=int)
     parser.add_argument("--dataset_path", default="./dataset", type=str)
     parser.add_argument("--checkpoint_path", default="./out/ckpt.pt", type=str)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--device", default="cuda", type=str)
+    parser.add_argument("--seed", default=None, type=int)
 
     args = parser.parse_args()
 
@@ -75,6 +77,10 @@ def main():
     )
 
     forward_context = torch.amp.autocast(device_type=args.device, dtype=dtype)
+
+    if args.seed:
+        torch.manual_seed(args.seed)
+        random.seed(args.seed)
 
     transformer = Compose(
         [
@@ -141,8 +147,7 @@ def main():
     model.train()
 
     for epoch in range(1, args.num_epochs + 1):
-        total_nll = torch.tensor(0.0).to(args.device)
-        total_mse = torch.tensor(0.0).to(args.device)
+        total_nll, total_mse = 0.0, 0.0
         total_batches = 0
 
         start = time.time()
@@ -166,8 +171,8 @@ def main():
 
             optimizer.step()
 
-            total_nll += nll
-            total_mse += mse
+            total_nll += nll.item()
+            total_mse += mse.item()
 
             total_batches += 1
 

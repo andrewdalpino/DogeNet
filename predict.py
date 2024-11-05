@@ -36,7 +36,7 @@ def main():
         else torch.float32
     )
 
-    compute_context = torch.amp.autocast(device_type=args.device, dtype=dtype)
+    forward_context = torch.amp.autocast(device_type=args.device, dtype=dtype)
 
     checkpoint = torch.load(
         args.checkpoint_path, map_location=args.device, weights_only=True
@@ -80,11 +80,12 @@ def main():
 
     x = image.unsqueeze(0).to(args.device)
 
-    print("Predicting ...")
     model.eval()
 
+    print("Predicting ...")
+
     with torch.no_grad():
-        with compute_context:
+        with forward_context:
             y1_pred, y2_pred = model(x)
 
         y1_pred = torch.exp(y1_pred)
