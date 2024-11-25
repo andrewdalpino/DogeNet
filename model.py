@@ -1,3 +1,5 @@
+from torch import Tensor
+
 from torch.nn import (
     Module,
     Sequential,
@@ -11,6 +13,8 @@ from torch.nn import (
     BatchNorm1d,
     BatchNorm2d,
     LogSoftmax,
+    NLLLoss,
+    MSELoss,
 )
 
 
@@ -57,17 +61,30 @@ class ResDoge50(Module):
             LinearRegressor(4096, 4),
         )
 
+        self.nll_loss = NLLLoss()
+        self.mse_loss = MSELoss()
+
     @property
-    def num_trainable_params(self):
+    def num_trainable_params(self) -> int:
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
 
-    def forward(self, x):
+    def forward(
+        self, x: Tensor, y1: Tensor | None = None, y2: Tensor | None = None
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
         x = self.body(x)
 
-        y1 = self.classifier_head(x)
-        y2 = self.box_head(x)
+        y1_pred = self.classifier_head(x)
+        y2_pred = self.box_head(x)
 
-        return y1, y2
+        nll, mse = None, None
+
+        if y1 is not None:
+            nll = self.nll_loss(y1_pred, y1)
+
+        if y2 is not None:
+            mse = self.mse_loss(y2_pred, y2)
+
+        return y1_pred, y2_pred, nll, mse
 
 
 class ResDoge34(Module):
@@ -113,17 +130,30 @@ class ResDoge34(Module):
             LinearRegressor(1024, 4),
         )
 
+        self.nll_loss = NLLLoss()
+        self.mse_loss = MSELoss()
+
     @property
-    def num_trainable_params(self):
+    def num_trainable_params(self) -> int:
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
 
-    def forward(self, x):
+    def forward(
+        self, x: Tensor, y1: Tensor | None = None, y2: Tensor | None = None
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
         x = self.body(x)
 
-        y1 = self.classifier_head(x)
-        y2 = self.box_head(x)
+        y1_pred = self.classifier_head(x)
+        y2_pred = self.box_head(x)
 
-        return y1, y2
+        nll, mse = None, None
+
+        if y1 is not None:
+            nll = self.nll_loss(y1_pred, y1)
+
+        if y2 is not None:
+            mse = self.mse_loss(y2_pred, y2)
+
+        return y1_pred, y2_pred, nll, mse
 
 
 class VGGDoge(Module):
@@ -167,17 +197,30 @@ class VGGDoge(Module):
             LinearRegressor(512, 4),
         )
 
+        self.nll_loss = NLLLoss()
+        self.mse_loss = MSELoss()
+
     @property
-    def num_trainable_params(self):
+    def num_trainable_params(self) -> int:
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
 
-    def forward(self, x):
+    def forward(
+        self, x: Tensor, y1: Tensor | None = None, y2: Tensor | None = None
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
         x = self.body(x)
 
-        y1 = self.classifier_head(x)
-        y2 = self.box_head(x)
+        y1_pred = self.classifier_head(x)
+        y2_pred = self.box_head(x)
 
-        return y1, y2
+        nll, mse = None, None
+
+        if y1 is not None:
+            nll = self.nll_loss(y1_pred, y1)
+
+        if y2 is not None:
+            mse = self.mse_loss(y2_pred, y2)
+
+        return y1_pred, y2_pred, nll, mse
 
 
 class Conv7x7Block(Module):
@@ -199,7 +242,7 @@ class Conv7x7Block(Module):
             GELU(),
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.layers.forward(x)
 
 
@@ -248,16 +291,17 @@ class ResidualBlock(Module):
         self.batch_norm = BatchNorm2d(channels_out)
         self.activation = GELU()
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         residual = self.residual.forward(x)
 
-        x_hat = self.shortcut(x)
+        x = self.shortcut(x)
 
-        z = self.batch_norm(x_hat + residual)
+        z = x + residual
 
-        out = self.activation(z)
+        z = self.batch_norm(z)
+        z = self.activation(z)
 
-        return out
+        return z
 
 
 class BottleneckBlock(Module):
@@ -317,16 +361,17 @@ class BottleneckBlock(Module):
         self.batch_norm = BatchNorm2d(channels_out)
         self.activation = GELU()
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         residual = self.residual.forward(x)
 
-        x_hat = self.shortcut(x)
+        x = self.shortcut(x)
 
-        z = self.batch_norm(x_hat + residual)
+        z = x + residual
 
-        out = self.activation(z)
+        z = self.batch_norm(z)
+        z = self.activation(z)
 
-        return out
+        return z
 
 
 class Conv2XBlock(Module):
@@ -358,7 +403,7 @@ class Conv2XBlock(Module):
             GELU(),
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.layers.forward(x)
 
 
@@ -376,7 +421,7 @@ class FullyConnected(Module):
             GELU(),
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.layers.forward(x)
 
 
@@ -393,7 +438,7 @@ class SoftmaxClassifier(Module):
             LogSoftmax(dim=1),
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.layers.forward(x)
 
 
@@ -409,5 +454,5 @@ class LinearRegressor(Module):
             ),
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.layers.forward(x)

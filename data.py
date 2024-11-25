@@ -2,7 +2,6 @@ import os
 from os import path
 import tarfile
 from xml.etree import ElementTree
-from typing import Optional, List
 
 import torch
 
@@ -166,7 +165,7 @@ class DogeDataset(Dataset):
         self,
         root_path: str,
         train: bool = True,
-        transformer: Optional[Transform] = None,
+        transformer: Transform | None = None,
     ):
         self._check_dataset_or_download(root_path)
 
@@ -179,6 +178,7 @@ class DogeDataset(Dataset):
         annotations_path = path.join(root_path, self.ANNOTATIONS_FOLDER_NAME)
 
         image_filenames = [f"{annotation}.jpg" for annotation in annotations]
+
         bounding_boxes = [
             self._get_boxes(path.join(annotations_path, annotation))
             for annotation in annotations
@@ -250,7 +250,7 @@ class DogeDataset(Dataset):
 
             os.remove(file_path)
 
-    def _get_boxes(self, annotation_path: str) -> List[List[float]]:
+    def _get_boxes(self, annotation_path: str) -> list[list[float]]:
         tree = ElementTree.parse(annotation_path)
 
         boxes = []

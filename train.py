@@ -1,13 +1,14 @@
-import time
 import random
+
 from os import path
 from argparse import ArgumentParser
 
 import torch
 
 from torch.utils.data import DataLoader
-from torch.nn import NLLLoss, MSELoss
 from torch.optim import AdamW
+from torch.amp import autocast
+from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 
 from torchvision.transforms.v2 import (
     Compose,
@@ -15,6 +16,8 @@ from torchvision.transforms.v2 import (
     RandomResizedCrop,
     RandomHorizontalFlip,
     RandomPhotometricDistort,
+    Resize,
+    CenterCrop,
 )
 
 from torchmetrics.classification import MulticlassAccuracy
@@ -22,6 +25,8 @@ from torchmetrics.detection import IntersectionOverUnion
 
 from model import VGGDoge, ResDoge34, ResDoge50
 from data import DogeDataset
+
+from tqdm import tqdm
 
 
 def main():
@@ -33,13 +38,13 @@ def main():
         choices=["vggdoge", "resdoge34", "resdoge50"],
         type=str,
     )
-    parser.add_argument("--batch_size", default=64, type=int)
-    parser.add_argument("--learning_rate", default=1e-4, type=float)
-    parser.add_argument("--num_epochs", default=10000, type=int)
-    parser.add_argument("--eval_epochs", default=10, type=int)
-    parser.add_argument("--checkpoint_epochs", default=20, type=int)
+    parser.add_argument("--batch_size", default=128, type=int)
+    parser.add_argument("--learning_rate", default=5e-4, type=float)
+    parser.add_argument("--num_epochs", default=1000, type=int)
+    parser.add_argument("--eval_interval", default=10, type=int)
     parser.add_argument("--dataset_path", default="./dataset", type=str)
-    parser.add_argument("--checkpoint_path", default="./out/ckpt.pt", type=str)
+    parser.add_argument("--checkpoint_interval", default=20, type=int)
+    parser.add_argument("--checkpoint_path", default="./out/checkpoint.pt", type=str)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--device", default="cuda", type=str)
     parser.add_argument("--seed", default=None, type=int)
@@ -57,14 +62,14 @@ def main():
     if args.num_epochs < 1:
         raise ValueError(f"Must train for at least 1 epoch, {args.num_epochs} given.")
 
-    if args.eval_epochs < 1:
+    if args.eval_interval < 1:
         raise ValueError(
-            f"Eval epochs must be greater than 0, {args.eval_epochs} given."
+            f"Eval interval must be greater than 0, {args.eval_interval} given."
         )
 
-    if args.checkpoint_epochs < 1:
+    if args.checkpoint_interval < 1:
         raise ValueError(
-            f"Checkpoint epochs must be greater than 0, {args.checkpoint_epochs} given."
+            f"Checkpoint interval must be greater than 0, {args.checkpoint_interval} given."
         )
 
     if "cuda" in args.device and not torch.cuda.is_available():
@@ -72,17 +77,17 @@ def main():
 
     dtype = (
         torch.bfloat16
-        if args.device == "cuda" and torch.cuda.is_bf16_supported()
+        if args.device == "cuda" and is_bf16_supported()
         else torch.float32
     )
 
-    forward_context = torch.amp.autocast(device_type=args.device, dtype=dtype)
+    forward_context = autocast(device_type=args.device, dtype=dtype)
 
     if args.seed:
         torch.manual_seed(args.seed)
         random.seed(args.seed)
 
-    transformer = Compose(
+    train_transformer = Compose(
         [
             RandomResizedCrop((224, 224), ratio=(1, 1.3)),
             RandomHorizontalFlip(),
@@ -90,42 +95,56 @@ def main():
             ToDtype(torch.float32, scale=True),
         ]
     )
-
-    train = DogeDataset(
-        root_path=args.dataset_path, train=True, transformer=transformer
+    test_transformer = Compose(
+        [
+            Resize(224),
+            CenterCrop((224, 224)),
+            ToDtype(torch.float32, scale=True),
+        ]
     )
-    test = DogeDataset(
-        root_path=args.dataset_path, train=False, transformer=transformer
-    )
 
-    num_classes = train.num_classes
+    training = DogeDataset(
+        root_path=args.dataset_path, train=True, transformer=train_transformer
+    )
+    testing = DogeDataset(
+        root_path=args.dataset_path, train=False, transformer=test_transformer
+    )
 
     train_loader = DataLoader(
-        train, batch_size=args.batch_size, pin_memory=True, shuffle=True
+        training,
+        batch_size=args.batch_size,
+        pin_memory="cpu" not in args.device,
+        shuffle=True,
     )
-    test_loader = DataLoader(test, batch_size=args.batch_size, pin_memory=True)
+    test_loader = DataLoader(
+        testing,
+        batch_size=args.batch_size,
+        pin_memory="cpu" not in args.device,
+        shuffle=False,
+    )
+
+    model_args = {
+        "num_classes": training.num_classes,
+    }
 
     match args.architecture:
         case "resdoge50":
-            model = ResDoge50(num_classes)
+            model = ResDoge50(**model_args)
 
         case "resdoge34":
-            model = ResDoge34(num_classes)
+            model = ResDoge34(**model_args)
 
         case "vggdoge":
-            model = VGGDoge(num_classes)
+            model = VGGDoge(**model_args)
 
         case _:
             raise RuntimeError("Invalid network architecture.")
 
     model = model.to(args.device)
 
-    nll_loss = NLLLoss().to(args.device)
-    mse_loss = MSELoss().to(args.device)
-
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, fused=True)
 
-    accuracy_metric = MulticlassAccuracy(num_classes, top_k=3).to(args.device)
+    accuracy_metric = MulticlassAccuracy(training.num_classes, top_k=3).to(args.device)
     iou_metric = IntersectionOverUnion().to(args.device)
 
     print("Compiling model")
@@ -150,20 +169,13 @@ def main():
         total_nll, total_mse = 0.0, 0.0
         total_batches = 0
 
-        start = time.time()
-
-        for x, y1, y2 in train_loader:
+        for x, y1, y2 in tqdm(train_loader, desc=f"Epoch {epoch}", leave=False):
             x = x.to(args.device, non_blocking=True)
             y1 = y1.to(args.device, non_blocking=True)
             y2 = y2.to(args.device, non_blocking=True)
 
-            optimizer.zero_grad()
-
             with forward_context:
-                y1_pred, y2_pred = model(x)
-
-                nll = nll_loss(y1_pred, y1)
-                mse = mse_loss(y2_pred, y2)
+                y1_pred, y2_pred, nll, mse = model(x, y1, y2)
 
                 total_loss = nll / nll.detach() + mse / mse.detach()
 
@@ -171,57 +183,58 @@ def main():
 
             optimizer.step()
 
+            optimizer.zero_grad(set_to_none=True)
+
             total_nll += nll.item()
             total_mse += mse.item()
 
             total_batches += 1
 
-        duration = time.time() - start
-
         average_cross_entropy = total_nll / total_batches
         average_mse = total_mse / total_batches
 
         print(
-            f"Epoch: {epoch}, Cross Entropy: {average_cross_entropy:.5},",
-            f"Box MSE: {average_mse:.7}, Duration: {duration:.2f} seconds",
+            f"Epoch {epoch}:",
+            f"Cross Entropy: {average_cross_entropy:.5},",
+            f"Box MSE: {average_mse:.7}",
         )
 
-        if epoch % args.eval_epochs == 0:
+        if epoch % args.eval_interval == 0:
             model.eval()
 
-            for x, y1, y2 in test_loader:
+            for x, y1, y2 in tqdm(test_loader, desc="Testing", leave=False):
                 x = x.to(args.device, non_blocking=True)
                 y1 = y1.to(args.device, non_blocking=True)
                 y2 = y2.to(args.device, non_blocking=True)
 
                 with torch.no_grad():
                     with forward_context:
-                        y1_pred, y2_pred = model(x)
+                        y1_pred, y2_pred, _, _ = model(x)
 
                     y2_pred = [
                         {
-                            "boxes": box.view(1, -1),
-                            "labels": y1[i].view(1),
+                            "boxes": box.unsqueeze(0),
+                            "labels": label.unsqueeze(0),
                         }
-                        for i, box in enumerate(y2_pred)
+                        for box, label in zip(y2_pred, y1)
                     ]
-
-                    y2_hat = [
+                    y2 = [
                         {
-                            "boxes": box.view(1, -1),
-                            "labels": y1[i].view(1),
+                            "boxes": box.unsqueeze(0),
+                            "labels": label.unsqueeze(0),
                         }
-                        for i, box in enumerate(y2)
+                        for box, label in zip(y2, y1)
                     ]
 
                     accuracy_metric.update(y1_pred, y1)
-                    iou_metric.update(y2_pred, y2_hat)
+                    iou_metric.update(y2_pred, y2)
 
             average_accuracy = accuracy_metric.compute()
             average_iou = iou_metric.compute()
 
             print(
-                f"Top 3 Accuracy: {average_accuracy:.4}, Box IOU: {average_iou['iou']:.4}"
+                f"Top 3 Accuracy: {average_accuracy:.3},",
+                f"Box IOU: {average_iou['iou']:.4}",
             )
 
             accuracy_metric.reset()
@@ -229,11 +242,12 @@ def main():
 
             model.train()
 
-        if epoch % args.checkpoint_epochs == 0:
+        if epoch % args.checkpoint_interval == 0:
             checkpoint = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "architecture": args.architecture,
+                "model_args": model_args,
             }
 
             torch.save(checkpoint, args.checkpoint_path)

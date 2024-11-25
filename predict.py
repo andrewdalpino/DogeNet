@@ -18,8 +18,8 @@ def main():
     parser = ArgumentParser(description="Inference script")
 
     parser.add_argument("--image_path", type=str, required=True)
+    parser.add_argument("--checkpoint_path", default="./out/checkpoint.pt", type=str)
     parser.add_argument("--top_k", default=3, type=int)
-    parser.add_argument("--checkpoint_path", default="./out/ckpt.pt", type=str)
     parser.add_argument("--device", default="cuda", type=str)
 
     args = parser.parse_args()
@@ -42,17 +42,15 @@ def main():
         args.checkpoint_path, map_location=args.device, weights_only=True
     )
 
-    num_classes = len(DogeDataset.CLASS_MAPPING)
-
     match checkpoint["architecture"]:
         case "resdoge50":
-            model = ResDoge50(num_classes)
+            model = ResDoge50(**checkpoint["model_args"])
 
         case "resdoge34":
-            model = ResDoge34(num_classes)
+            model = ResDoge34(**checkpoint["model_args"])
 
         case "vggdoge":
-            model = VGGDoge(num_classes)
+            model = VGGDoge(**checkpoint["model_args"])
 
         case _:
             raise RuntimeError("Invalid network architecture.")
@@ -88,15 +86,13 @@ def main():
         with forward_context:
             y1_pred, y2_pred = model(x)
 
-        y1_pred = torch.exp(y1_pred)
+    probabilities = torch.exp(y1_pred).squeeze(0)
 
-    probabilities, indices = torch.topk(y1_pred[0], k=args.top_k)
+    probabilities, indices = torch.topk(probabilities, k=args.top_k, sorted=True)
 
     predictions = [DogeDataset.CLASS_MAPPING[index] for index in indices]
 
-    label = predictions[0]
-
-    box = y2_pred[0].tolist()
+    box = y2_pred.squeeze(0).tolist()
 
     print(f"Top {args.top_k}:")
     for i in range(0, args.top_k):
@@ -114,7 +110,7 @@ def main():
 
     axis.imshow(image)
     axis.add_patch(patch)
-    axis.text(xmin + 3, ymax - 3, label, fontsize=18, color="r")
+    axis.text(xmin + 3, ymax - 3, predictions[0], fontsize=18, color="r")
 
     plt.show()
 
